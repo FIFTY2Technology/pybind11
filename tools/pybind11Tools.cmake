@@ -13,7 +13,46 @@ if(NOT PYBIND11_PYTHON_VERSION)
 endif()
 
 set(Python_ADDITIONAL_VERSIONS 3.7 3.6 3.5 3.4)
-find_package(PythonLibsNew ${PYBIND11_PYTHON_VERSION} REQUIRED)
+
+set(FOUND_PYTHON_VERSIONS "")
+if(PYBIND11_PYTHON_VERSION)
+  foreach(REQUESTED_PYTHON_VERSION ${PYBIND11_PYTHON_VERSION})
+      # TODO comment what does each of this
+      unset(PYTHONLIBS_FOUND)
+      unset(PYTHONINTERP_FOUND)
+      unset(PYTHON_EXECUTABLE CACHE)
+      unset(PYTHON_LIBRARY CACHE)
+      unset(PYTHON_LIBRARIES)
+
+      find_package(PythonLibsNew ${REQUESTED_PYTHON_VERSION} REQUIRED)
+
+      set(REMEBER_VERSION_PREFIX ${PYTHON_VERSION_MAJOR}_${PYTHON_VERSION_MINOR}_${PYTHON_VERSION_PATCH})
+      list(APPEND FOUND_PYTHON_VERSIONS ${REMEBER_VERSION_PREFIX})
+
+      set(REMEBER_${REMEBER_VERSION_PREFIX}_PYTHON_INCLUDE_DIRS ${PYTHON_INCLUDE_DIRS} CACHE INTERNAL "")
+      set(REMEBER_${REMEBER_VERSION_PREFIX}_PYTHON_MODULE_PREFIX ${PYTHON_MODULE_PREFIX} CACHE INTERNAL "")
+      set(REMEBER_${REMEBER_VERSION_PREFIX}_PYTHON_MODULE_EXTENSION ${PYTHON_MODULE_EXTENSION} CACHE INTERNAL "")
+      set(REMEBER_${REMEBER_VERSION_PREFIX}_PYTHON_LIBRARIES ${PYTHON_LIBRARIES} CACHE INTERNAL "")
+
+  endforeach()
+else()
+  find_package(PythonLibsNew ${REQUESTED_PYTHON_VERSION} REQUIRED)
+
+  set(REMEBER_VERSION_PREFIX ${PYTHON_VERSION_MAJOR}_${PYTHON_VERSION_MINOR}_${PYTHON_VERSION_PATCH})
+  list(APPEND FOUND_PYTHON_VERSIONS ${REMEBER_VERSION_PREFIX})
+
+  set(REMEBER_${REMEBER_VERSION_PREFIX}_PYTHON_INCLUDE_DIRS ${PYTHON_INCLUDE_DIRS} CACHE INTERNAL "")
+  set(REMEBER_${REMEBER_VERSION_PREFIX}_PYTHON_MODULE_PREFIX ${PYTHON_MODULE_PREFIX} CACHE INTERNAL "")
+  set(REMEBER_${REMEBER_VERSION_PREFIX}_PYTHON_MODULE_EXTENSION ${PYTHON_MODULE_EXTENSION} CACHE INTERNAL "")
+  set(REMEBER_${REMEBER_VERSION_PREFIX}_PYTHON_LIBRARIES ${PYTHON_LIBRARIES} CACHE INTERNAL "")
+
+
+endif()
+
+
+
+list(REMOVE_DUPLICATES FOUND_PYTHON_VERSIONS)
+set(REMEBER_PYTHON_VERSIONS ${FOUND_PYTHON_VERSIONS} CACHE INTERNAL "")
 
 include(CheckCXXCompilerFlag)
 include(CMakeParseArguments)
@@ -124,74 +163,85 @@ function(pybind11_add_module target_name)
     set(exclude_from_all EXCLUDE_FROM_ALL)
   endif()
 
-  add_library(${target_name} ${lib_type} ${exclude_from_all} ${ARG_UNPARSED_ARGUMENTS})
-
-  target_include_directories(${target_name}
-    PRIVATE ${PYBIND11_INCLUDE_DIR}  # from project CMakeLists.txt
-    PRIVATE ${pybind11_INCLUDE_DIR}  # from pybind11Config
-    PRIVATE ${PYTHON_INCLUDE_DIRS})
-
-  # The prefix and extension are provided by FindPythonLibsNew.cmake
-  set_target_properties(${target_name} PROPERTIES PREFIX "${PYTHON_MODULE_PREFIX}")
-  set_target_properties(${target_name} PROPERTIES SUFFIX "${PYTHON_MODULE_EXTENSION}")
-
-  if(WIN32 OR CYGWIN)
-    # Link against the Python shared library on Windows
-    target_link_libraries(${target_name} PRIVATE ${PYTHON_LIBRARIES})
-  elseif(APPLE)
-    # It's quite common to have multiple copies of the same Python version
-    # installed on one's system. E.g.: one copy from the OS and another copy
-    # that's statically linked into an application like Blender or Maya.
-    # If we link our plugin library against the OS Python here and import it
-    # into Blender or Maya later on, this will cause segfaults when multiple
-    # conflicting Python instances are active at the same time (even when they
-    # are of the same version).
-
-    # Windows is not affected by this issue since it handles DLL imports
-    # differently. The solution for Linux and Mac OS is simple: we just don't
-    # link against the Python library. The resulting shared library will have
-    # missing symbols, but that's perfectly fine -- they will be resolved at
-    # import time.
-
-    target_link_libraries(${target_name} PRIVATE "-undefined dynamic_lookup")
-
-    if(ARG_SHARED)
-      # Suppress CMake >= 3.0 warning for shared libraries
-      set_target_properties(${target_name} PROPERTIES MACOSX_RPATH ON)
+  list(LENGTH REMEBER_PYTHON_VERSIONS REMEBER_PYTHON_VERSIONS_COUNT)
+  foreach(PYTHONVERSION ${REMEBER_PYTHON_VERSIONS})
+    if(REMEBER_PYTHON_VERSIONS_COUNT GREATER 1)
+      set(target_name_version "${target_name}${PYTHONVERSION}")
+    else()
+      set(target_name_version "${target_name}")
     endif()
-  endif()
+    message(STATUS "add target ${target_name_version}")
 
-  select_cxx_standard()
-  if(NOT MSVC)
-    # Make sure C++11/14 are enabled
-    target_compile_options(${target_name} PUBLIC ${PYBIND11_CPP_STANDARD})
-  endif()
+    add_library(${target_name_version} ${lib_type} ${exclude_from_all} ${ARG_UNPARSED_ARGUMENTS})
 
-  if(ARG_NO_EXTRAS)
-    return()
-  endif()
+    target_include_directories(${target_name_version}
+      PRIVATE ${PYBIND11_INCLUDE_DIR}  # from project CMakeLists.txt
+      PRIVATE ${pybind11_INCLUDE_DIR}  # from pybind11Config
+      PRIVATE ${REMEBER_${PYTHONVERSION}_PYTHON_INCLUDE_DIRS})
 
-  _pybind11_add_lto_flags(${target_name} ${ARG_THIN_LTO})
+    # The prefix and extension are provided by FindPythonLibsNew.cmake
+    set_target_properties(${target_name_version} PROPERTIES PREFIX "${REMEBER_${PYTHONVERSION}_PYTHON_MODULE_PREFIX}")
+    set_target_properties(${target_name_version} PROPERTIES SUFFIX "${REMEBER_${PYTHONVERSION}_PYTHON_MODULE_EXTENSION}")
+    set_target_properties(${target_name_version} PROPERTIES OUTPUT_NAME "${target_name}")
 
-  if (NOT MSVC AND NOT ${CMAKE_BUILD_TYPE} MATCHES Debug)
-    # Set the default symbol visibility to hidden (very important to obtain small binaries)
-    target_compile_options(${target_name} PRIVATE "-fvisibility=hidden")
+    if(WIN32 OR CYGWIN)
+      # Link against the Python shared library on Windows
+      target_link_libraries(${target_name_version} PRIVATE ${REMEBER_${PYTHONVERSION}_PYTHON_LIBRARIES})
+    elseif(APPLE)
+      # It's quite common to have multiple copies of the same Python version
+      # installed on one's system. E.g.: one copy from the OS and another copy
+      # that's statically linked into an application like Blender or Maya.
+      # If we link our plugin library against the OS Python here and import it
+      # into Blender or Maya later on, this will cause segfaults when multiple
+      # conflicting Python instances are active at the same time (even when they
+      # are of the same version).
 
-    # Strip unnecessary sections of the binary on Linux/Mac OS
-    if(CMAKE_STRIP)
-      if(APPLE)
-        add_custom_command(TARGET ${target_name} POST_BUILD
-                           COMMAND ${CMAKE_STRIP} -x $<TARGET_FILE:${target_name}>)
-      else()
-        add_custom_command(TARGET ${target_name} POST_BUILD
-                           COMMAND ${CMAKE_STRIP} $<TARGET_FILE:${target_name}>)
+      # Windows is not affected by this issue since it handles DLL imports
+      # differently. The solution for Linux and Mac OS is simple: we just don't
+      # link against the Python library. The resulting shared library will have
+      # missing symbols, but that's perfectly fine -- they will be resolved at
+      # import time.
+
+      target_link_libraries(${target_name_version} PRIVATE "-undefined dynamic_lookup")
+
+      if(ARG_SHARED)
+        # Suppress CMake >= 3.0 warning for shared libraries
+        set_target_properties(${target_name_version} PROPERTIES MACOSX_RPATH ON)
       endif()
     endif()
-  endif()
 
-  if(MSVC)
-    # /MP enables multithreaded builds (relevant when there are many files), /bigobj is
-    # needed for bigger binding projects due to the limit to 64k addressable sections
-    target_compile_options(${target_name} PRIVATE /MP /bigobj)
-  endif()
+    select_cxx_standard()
+    if(NOT MSVC)
+      # Make sure C++11/14 are enabled
+      target_compile_options(${target_name_version} PUBLIC ${PYBIND11_CPP_STANDARD})
+    endif()
+
+    if(ARG_NO_EXTRAS)
+      return()
+    endif()
+
+    _pybind11_add_lto_flags(${target_name_version} ${ARG_THIN_LTO})
+
+    if (NOT MSVC AND NOT ${CMAKE_BUILD_TYPE} MATCHES Debug)
+      # Set the default symbol visibility to hidden (very important to obtain small binaries)
+      target_compile_options(${target_name_version} PRIVATE "-fvisibility=hidden")
+
+      # Strip unnecessary sections of the binary on Linux/Mac OS
+      if(CMAKE_STRIP)
+        if(APPLE)
+          add_custom_command(TARGET ${target_name_version} POST_BUILD
+                             COMMAND ${CMAKE_STRIP} -x $<TARGET_FILE:${target_name_version}>)
+        else()
+          add_custom_command(TARGET ${target_name_version} POST_BUILD
+                             COMMAND ${CMAKE_STRIP} $<TARGET_FILE:${target_name_version}>)
+        endif()
+      endif()
+    endif()
+
+    if(MSVC)
+      # /MP enables multithreaded builds (relevant when there are many files), /bigobj is
+      # needed for bigger binding projects due to the limit to 64k addressable sections
+      target_compile_options(${target_name_version} PRIVATE /MP /bigobj)
+    endif()
+  endforeach()
 endfunction()
